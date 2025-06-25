@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/user"
@@ -14,117 +15,88 @@ import (
 // favorite prompt config. Once installed, it should be just called
 // in whatever config you might want.
 func main() {
-	flag := flag.NewFlagSet("tprompt", flag.ExitOnError)
-
-	l := flag.Bool("left", true, "prints left prompt")
 	r := flag.Bool("right", false, "prints right prompt")
-
-	if err := flag.Parse(os.Args[1:]); err != nil {
-		fmt.Fprintf(flag.Output(), "Could not parse flags: %v\n", err)
-		os.Exit(1)
-	}
+	flag.Parse()
 
 	if *r {
-		out, err := right()
-		if err != nil {
-			fmt.Fprintf(flag.Output(), "Right prompt err: %v\n", err)
+		if err := right(os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "Right prompt err: %v\n", err)
 			os.Exit(1)
 		}
-		os.Stdout.WriteString(out)
-		os.Exit(0)
-	}
-
-	if *l {
-		out, err := left()
-		if err != nil {
-			fmt.Fprintf(flag.Output(), "Left prompt err: %v\n", err)
+	} else {
+		if err := left(os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "Left prompt err: %v\n", err)
 			os.Exit(1)
 		}
-		os.Stdout.WriteString(out)
-		os.Exit(0)
 	}
-
-	flag.Usage()
-	os.Exit(1)
 }
 
-// right generates the right prompt.
-// If executed over ssh, it prints <username>@<hostname>, otherwise
-// it is just an empty string.
-func right() (string, error) {
+func right(out io.Writer) error {
 	if !isRemote() {
-		return "", nil
+		return nil
 	}
 
 	usr, err := user.Current()
 	if err != nil {
-		return "", err
+		return err
 	}
+	out.Write([]byte(usr.Username))
 
 	host, err := os.Hostname()
 	if err != nil {
-		return "", err
+		return err
 	}
+	out.Write([]byte("@" + host))
 
-	return usr.Username + "@" + host, nil
+	return nil
 }
 
-func left() (string, error) {
-	var prompt strings.Builder
+func left(out io.Writer) error {
+	// wd, err := os.Getwd()
+	// if err != nil {
+	// 	return err
+	// }
 
-	wd, err := os.Getwd()
-	if err != nil {
-		return prompt.String(), err
-	}
+	// home, err := os.UserHomeDir()
+	// if err != nil {
+	// 	return err
+	// }
 
-	usr, err := user.Current()
-	if err != nil {
-		return prompt.String(), err
-	}
-
-	if strings.HasPrefix(wd, usr.HomeDir) {
-		prompt.WriteRune('~')
-		prompt.WriteString(strings.TrimPrefix(wd, usr.HomeDir))
-	} else {
-		prompt.WriteString(wd)
-	}
+	// dir := strings.ReplaceAll(wd, home, "~")
+	// out.Write([]byte(dir))
 
 	if isRepo() {
-		var flags string
+		out.Write([]byte("@"))
 
 		status, err := repoStatus()
 		if err != nil {
-			return prompt.String(), err
+			return err
 		}
 
 		if status.head != "main" && status.head != "master" {
-			flags += "c"
+			out.Write([]byte("*"))
 		}
 
 		if status.dirty {
-			flags += "d"
+			out.Write([]byte("!"))
 		}
 
 		if status.behind > 0 {
-			flags += "b"
+			out.Write([]byte("<"))
 		}
 
 		if status.ahead > 0 {
-			flags += "a"
+			out.Write([]byte(">"))
 		}
 
 		if status.stash {
-			flags += "s"
-		}
-
-		if len(flags) > 0 {
-			prompt.WriteString("|" + flags)
+			out.Write([]byte("$"))
 		}
 	}
 
-	prompt.WriteString("> ")
+	out.Write([]byte("> "))
 
-	return fmt.Sprintf("%s", prompt.String()), nil
+	return nil
 }
 
 func isRemote() bool {
@@ -135,12 +107,6 @@ func isRepo() bool {
 	cmd := exec.Command("git", "--no-optional-locks", "rev-parse", "--is-inside-work-tree")
 	err := cmd.Run()
 	return err == nil
-}
-
-func repoPath() (string, error) {
-	cmd := exec.Command("git", "--no-optional-locks", "rev-parse", "--show-toplevel")
-	out, err := cmd.Output()
-	return string(out), err
 }
 
 func repoStatus() (status, error) {
