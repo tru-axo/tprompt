@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -15,19 +17,33 @@ import (
 // favorite prompt config. Once installed, it should be just called
 // in whatever config you might want.
 func main() {
-	r := flag.Bool("right", false, "prints right prompt")
-	flag.Parse()
+	args := os.Args[1:]
 
-	if *r {
-		if err := right(os.Stdout); err != nil {
-			fmt.Fprintf(os.Stderr, "Right prompt err: %v\n", err)
-			os.Exit(1)
-		}
-	} else {
-		if err := left(os.Stdout); err != nil {
-			fmt.Fprintf(os.Stderr, "Left prompt err: %v\n", err)
-			os.Exit(1)
-		}
+	var cmd string
+	if len(args) > 0 {
+		cmd = args[0]
+	}
+
+	var err error
+	switch cmd {
+	case "right":
+		err = right(os.Stdout)
+
+	case "tmux-right":
+		fs := flag.NewFlagSet("tmux", flag.ExitOnError)
+		width := fs.Int("width", 40, "Max width")
+		fs.Parse(args[0:])
+		err = tmuxRight(*width, os.Stdin, os.Stdout)
+
+	case "left":
+		fallthrough
+	default:
+		err = left(os.Stdout)
+	}
+
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Prompt err (%s): %v\n", cmd, err)
+		os.Exit(1)
 	}
 }
 
@@ -51,22 +67,61 @@ func right(out io.Writer) error {
 	return nil
 }
 
+func tmuxRight(limit int, in io.Reader, out io.Writer) error {
+	wd, _ := io.ReadAll(in)
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+
+	path := string(wd)
+
+	if strings.HasPrefix(path, home) {
+		path = "~" + path[len(home):]
+	}
+
+	if len(path) <= limit {
+		out.Write([]byte(path))
+		return nil
+	}
+
+	parts := strings.Split(path, string(filepath.Separator))
+	if len(parts) < 1 {
+		return nil
+	}
+
+	for i := 0; i < len(parts)-1; i++ {
+		if parts[i] != "~" && len(parts[i]) > 0 {
+			parts[i] = string(parts[i][0])
+		}
+
+		path = filepath.Join(parts...)
+		if len(path) <= limit {
+			out.Write([]byte(path))
+			return nil
+		}
+	}
+
+	slices.Reverse(parts)
+
+	path = parts[0]
+	for _, p := range parts[1:] {
+		v := filepath.Join(p, path)
+		if len(v) < limit {
+			path = v
+		} else {
+			break
+		}
+	}
+
+	out.Write([]byte("+" + path))
+	return nil
+}
+
 func left(out io.Writer) error {
-	// wd, err := os.Getwd()
-	// if err != nil {
-	// 	return err
-	// }
-
-	// home, err := os.UserHomeDir()
-	// if err != nil {
-	// 	return err
-	// }
-
-	// dir := strings.ReplaceAll(wd, home, "~")
-	// out.Write([]byte(dir))
-
 	if isRepo() {
-		out.Write([]byte("@"))
+		out.Write([]byte("g"))
 
 		status, err := repoStatus()
 		if err != nil {
@@ -74,23 +129,23 @@ func left(out io.Writer) error {
 		}
 
 		if status.head != "main" && status.head != "master" {
-			out.Write([]byte("*"))
+			out.Write([]byte("c"))
 		}
 
 		if status.dirty {
-			out.Write([]byte("!"))
+			out.Write([]byte("d"))
 		}
 
 		if status.behind > 0 {
-			out.Write([]byte("<"))
+			out.Write([]byte("b"))
 		}
 
 		if status.ahead > 0 {
-			out.Write([]byte(">"))
+			out.Write([]byte("a"))
 		}
 
 		if status.stash {
-			out.Write([]byte("$"))
+			out.Write([]byte("s"))
 		}
 	}
 
